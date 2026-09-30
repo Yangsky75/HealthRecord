@@ -48,7 +48,7 @@ button:focus-visible,textarea:focus-visible,input:focus-visible{outline:3px soli
 .titlerow{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:12px}
 h1{font-size:20px;font-weight:700;margin:0;letter-spacing:.02em}
 .sync{font-size:12px;color:var(--muted)}
-.types{display:grid;grid-template-columns:1fr 1fr;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px;gap:4px}
+.types{display:grid;grid-template-columns:repeat(3,1fr);background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px;gap:4px}
 .types button{border:0;background:transparent;padding:10px 0;border-radius:10px;font-size:17px;font-weight:500;color:var(--muted)}
 .types button[aria-selected="true"]{background:var(--accent);color:var(--card);font-weight:700}
 .views{display:flex;gap:20px;margin-top:12px;padding:0 4px}
@@ -77,6 +77,12 @@ h1{font-size:20px;font-weight:700;margin:0;letter-spacing:.02em}
 .chips.grid4 .chip{padding:8px 0;border-radius:10px}
 .chips.grid4 .chip[aria-pressed="true"]::before{content:"✓ "}
 .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.addwhen{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.addwhen label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:4px}
+.addwhen input{font:inherit;font-size:16px;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:8px 10px;width:100%;min-height:44px}
+.addtype{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.addtype .chip{border-radius:12px}
+.warn{font-size:13px;color:var(--danger);margin:8px 0 0}
 .pair .chips{flex-wrap:nowrap}
 .pair .chip{flex:1;padding:8px 0}
 
@@ -153,8 +159,9 @@ textarea::placeholder{color:var(--muted)}
     <div class="types" role="tablist">
       <button role="tab" data-type="stool" aria-selected="true">排便</button>
       <button role="tab" data-type="head" aria-selected="false">頭痛</button>
+      <button role="tab" data-type="add" aria-selected="false">補登</button>
     </div>
-    <div class="views" role="tablist">
+    <div class="views" role="tablist" id="views">
       <button role="tab" data-view="rec" aria-selected="true">紀錄</button>
       <button role="tab" data-view="stats" aria-selected="false">統計</button>
     </div>
@@ -190,6 +197,18 @@ const LS_KEY = 'bh-tracker-v1';
 const ui = { type:'stool', view:'rec', from:'', to:'', pendingDel:null };
 const blank = t => t === 'stool' ? { shape:null, texture:null, note:'' } : { locs:[], vomit:null, eye:null, note:'' };
 const sel = { stool: blank('stool'), head: blank('head') };
+const selAdd = { stool: blank('stool'), head: blank('head') };
+Object.assign(ui, { addType:'stool', addDate:'', addTime:'' });
+const isAdd = () => ui.type === 'add';
+const curType = () => isAdd() ? ui.addType : ui.type;
+const curSel = () => (isAdd() ? selAdd : sel)[curType()];
+function resetAddWhen(){ const d = new Date(); ui.addDate = ymd(d); ui.addTime = hm(d); }
+function addTimestamp(){
+  if (!ui.addDate || !ui.addTime) return null;
+  const [h,m] = ui.addTime.split(':').map(Number);
+  const d = parseYmd(ui.addDate); d.setHours(h, m, 0, 0);
+  return +d;
+}
 let store = {};   // "stool-2026-09" -> 該月紀錄陣列
 
 /* ---------- 小工具 ---------- */
@@ -226,17 +245,25 @@ function save(){
 /* ---------- 動作 ---------- */
 let lastAdded = null, toastTimer = null;
 function record(){
-  const now = Date.now(), s = sel[ui.type];
+  const type = curType(), s = curSel();
+  let now = Date.now();
+  if (isAdd()){
+    const t = addTimestamp();
+    if (t == null){ showToast('請選擇日期和時間', false); return; }
+    if (t > now){ showToast('補登的時間不能晚於現在', false); return; }
+    now = t;
+  }
   const e = { id: now.toString(36) + Math.random().toString(36).slice(2,6), t: now, note: s.note.trim() };
-  if (ui.type === 'stool'){ e.shape = s.shape; e.texture = s.texture; }
+  if (type === 'stool'){ e.shape = s.shape; e.texture = s.texture; }
   else { e.locs = LOCS.filter(l => s.locs.includes(l)); e.vomit = s.vomit; e.eye = s.eye; }
-  const docId = docIdFor(ui.type, now);
+  const docId = docIdFor(type, now);
   (store[docId] = store[docId] || []).push(e);
   save();
   lastAdded = { docId, id: e.id };
-  sel[ui.type] = blank(ui.type);
+  (isAdd() ? selAdd : sel)[type] = blank(type);
   render();
-  showToast('已紀錄 ' + hm(new Date(now)), true);
+  const d = new Date(now);
+  showToast((isAdd() ? '已補登 ' + md(d) + ' ' : '已紀錄 ') + hm(d), true);
 }
 function removeEntry(docId, id){
   if (!store[docId]) return;
@@ -303,8 +330,17 @@ function chips(field, opts, isOn, cls=''){
     `<button class="chip" data-f="${field}" data-v="${o}" aria-pressed="${isOn(o)}">${o}</button>`).join('') + '</div>';
 }
 function renderRec(){
-  const t = ui.type, s = sel[t];
+  const t = curType(), s = curSel(), add = isAdd();
   let h = '';
+  if (add){
+    const tt = addTimestamp();
+    h += `<section class="sec"><h2>補登項目</h2><div class="chips addtype">` +
+      [['stool','排便'],['head','頭痛']].map(([k,n]) => `<button class="chip" data-addtype="${k}" aria-pressed="${ui.addType === k}">${n}</button>`).join('') +
+      `</div><div class="addwhen">
+        <label>日期<input type="date" id="aDate" value="${ui.addDate}" max="${ymd(new Date())}"></label>
+        <label>時間<input type="time" id="aTime" value="${ui.addTime}"></label></div>` +
+      (tt != null && tt > Date.now() ? `<p class="warn">這個時間還沒到,請改成現在以前的時間。</p>` : '') + `</section>`;
+  }
   if (t === 'stool'){
     h += `<section class="sec"><h2>形狀<span class="hint">點一下選取,再點一次取消</span></h2><div class="shapes">` +
       SHAPES.map(x => `<button class="shape" data-f="shape" data-v="${x.k}" aria-pressed="${s.shape === x.k}">
@@ -317,11 +353,13 @@ function renderRec(){
   }
   h += `<section class="sec"><h2>備註</h2><textarea id="note" placeholder="${t === 'stool' ? '例如:顏色、有無出血、吃了什麼' : '例如:疼痛程度、吃了什麼藥、可能的誘因'}">${esc(s.note)}</textarea></section>`;
 
-  const todayKey = ymd(new Date());
-  const today = entriesOf(t).filter(e => ymd(new Date(e.t)) === todayKey);
-  h += `<section class="sec"><div class="today-head"><h2>今天</h2><span class="count">${today.length} 次</span></div>` +
+  const dayK = add ? ui.addDate : ymd(new Date());
+  const dayD = parseYmd(dayK);
+  const title = add ? `${md(dayD)}(${WD[dayD.getDay()]})的${t === 'stool' ? '排便' : '頭痛'}紀錄` : '今天';
+  const today = entriesOf(t).filter(e => ymd(new Date(e.t)) === dayK);
+  h += `<section class="sec"><div class="today-head"><h2>${title}</h2><span class="count">${today.length} 次</span></div>` +
     (today.length ? `<ul class="items">${today.map(e => itemHTML(e,t)).join('')}</ul>` :
-      `<p class="empty">今天還沒有紀錄。選好上面的項目後,按下方按鈕就會記下現在的時間。</p>`) + `</section>`;
+      `<p class="empty">${add ? '這一天還沒有紀錄。' : '今天還沒有紀錄。選好上面的項目後,按下方按鈕就會記下現在的時間。'}</p>`) + `</section>`;
   return h;
 }
 
@@ -444,19 +482,33 @@ function backupHTML(){
 
 /* ---------- 繪製 ---------- */
 function render(){
-  document.body.dataset.type = ui.type;
+  if (isAdd() && !ui.addDate) resetAddWhen();
+  document.body.dataset.type = curType();
   document.querySelectorAll('.types button').forEach(b => b.setAttribute('aria-selected', b.dataset.type === ui.type));
   document.querySelectorAll('.views button').forEach(b => b.setAttribute('aria-selected', b.dataset.view === ui.view));
-  $('#main').innerHTML = ui.view === 'rec' ? renderRec() : renderStats();
-  $('#bar').classList.toggle('hidden', ui.view !== 'rec');
-  $('#recLabel').textContent = ui.type === 'stool' ? '紀錄這次排便' : '紀錄這次頭痛';
+  $('#views').classList.toggle('hidden', isAdd());
+  $('#main').innerHTML = (isAdd() || ui.view === 'rec') ? renderRec() : renderStats();
+  $('#bar').classList.toggle('hidden', !isAdd() && ui.view !== 'rec');
+  $('#recLabel').textContent = isAdd() ? '補登這筆' + (ui.addType === 'stool' ? '排便' : '頭痛')
+    : ui.type === 'stool' ? '紀錄這次排便' : '紀錄這次頭痛';
+  tick();
+  const ad = $('#aDate'), at = $('#aTime');
+  if (ad) ad.addEventListener('change', () => { if (ad.value){ ui.addDate = ad.value; render(); } });
+  if (at) at.addEventListener('change', () => { if (at.value){ ui.addTime = at.value; render(); } });
   const note = $('#note');
-  if (note) note.addEventListener('input', () => { sel[ui.type].note = note.value; });
+  if (note) note.addEventListener('input', () => { curSel().note = note.value; });
   const f = $('#dFrom'), to = $('#dTo');
   if (f) f.addEventListener('change', () => { if (f.value){ ui.from = f.value; render(); } });
   if (to) to.addEventListener('change', () => { if (to.value){ ui.to = to.value; render(); } });
 }
 function tick(){
+  if (isAdd()){
+    const t = addTimestamp(); if (t == null) return;
+    const a = new Date(t);
+    $('#recDate').textContent = md(a) + '(' + WD[a.getDay()] + ')';
+    $('#recTime').textContent = hm(a);
+    return;
+  }
   const d = new Date();
   $('#recDate').textContent = md(d) + '(' + WD[d.getDay()] + ')';
   $('#recTime').textContent = hm(d);
@@ -466,13 +518,17 @@ function tick(){
 document.addEventListener('click', ev => {
   const b = ev.target.closest('button');
   if (!b) return;
-  if (b.closest('.types')){ ui.type = b.dataset.type; ui.pendingDel = null; render(); window.scrollTo(0,0); return; }
+  if (b.closest('.types')){
+    if (b.dataset.type === 'add' && !isAdd()) resetAddWhen();
+    ui.type = b.dataset.type; ui.pendingDel = null; render(); window.scrollTo(0,0); return;
+  }
+  if (b.dataset.addtype){ ui.addType = b.dataset.addtype; ui.pendingDel = null; render(); return; }
   if (b.closest('.views')){ ui.view = b.dataset.view; ui.pendingDel = null; render(); window.scrollTo(0,0); return; }
   if (b.dataset.preset){ Object.assign(ui, presetRange(b.dataset.preset)); ui.pendingDel = null; render(); return; }
   if (b.dataset.act === 'export'){ exportData(); return; }
   if (b.dataset.act === 'import'){ $('#importFile').click(); return; }
   if (b.dataset.f){
-    const s = sel[ui.type], f = b.dataset.f, v = b.dataset.v;
+    const s = curSel(), f = b.dataset.f, v = b.dataset.v;
     if (f === 'locs') s.locs = s.locs.includes(v) ? s.locs.filter(x => x !== v) : [...s.locs, v];
     else s[f] = s[f] === v ? null : v;
     b.closest('section').querySelectorAll(`[data-f="${f}"]`).forEach(x =>
